@@ -1,18 +1,23 @@
 package functional
 
-import "reflect"
+import (
+	"reflect"
+)
 
-type reducingFn func(interface{}, interface{}) interface{}
+type reducingFn func(reflect.Value, reflect.Value) reflect.Value
 type xfn func(interface{}) reducingFn
 
 func Mapping(f interface{}) xfn {
 	fv := reflect.ValueOf(f)
 	return func(f1 interface{}) reducingFn {
+		if rf, ok := f1.(reducingFn); ok {
+			return func(result, input reflect.Value) reflect.Value {
+				return rf(result, fv.Call([]reflect.Value{input})[0])
+			}
+		}
 		f1v := reflect.ValueOf(f1)
-		return func(result, input interface{}) interface{} {
-			rv := reflect.ValueOf(result)
-			iv := reflect.ValueOf(input)
-			return f1v.Call([]reflect.Value{rv, fv.Call([]reflect.Value{iv})[0]})[0].Interface()
+		return func(result, input reflect.Value) reflect.Value {
+			return f1v.Call([]reflect.Value{result, fv.Call([]reflect.Value{input})[0]})[0]
 		}
 	}
 }
@@ -20,12 +25,18 @@ func Mapping(f interface{}) xfn {
 func Filtering(pred interface{}) xfn {
 	pv := reflect.ValueOf(pred)
 	return func(f1 interface{}) reducingFn {
+		if rf, ok := f1.(reducingFn); ok {
+			return func(result, input reflect.Value) reflect.Value {
+				if pv.Call([]reflect.Value{input})[0].Interface().(bool) {
+					return rf(result, input)
+				}
+				return result
+			}
+		}
 		f1v := reflect.ValueOf(f1)
-		return func(result, input interface{}) interface{} {
-			rv := reflect.ValueOf(result)
-			iv := reflect.ValueOf(input)
-			if pv.Call([]reflect.Value{iv})[0].Interface().(bool) {
-				return f1v.Call([]reflect.Value{rv, iv})[0].Interface()
+		return func(result, input reflect.Value) reflect.Value {
+			if pv.Call([]reflect.Value{input})[0].Interface().(bool) {
+				return f1v.Call([]reflect.Value{result, input})[0]
 			}
 			return result
 		}
@@ -34,40 +45,41 @@ func Filtering(pred interface{}) xfn {
 
 func Taking(n int) xfn {
 	return func(f1 interface{}) reducingFn {
+		if rf, ok := f1.(reducingFn); ok {
+			return func(result, input reflect.Value) reflect.Value {
+				if n > 0 {
+					n--
+					return rf(result, input)
+				}
+				return result
+			}
+		}
 		f1v := reflect.ValueOf(f1)
-		return func(result, input interface{}) interface{} {
-			rv := reflect.ValueOf(result)
-			iv := reflect.ValueOf(input)
+		return func(result, input reflect.Value) reflect.Value {
 			if n > 0 {
 				n--
-				return f1v.Call([]reflect.Value{rv, iv})[0].Interface()
+				return f1v.Call([]reflect.Value{result, input})[0]
 			}
 			return result
 		}
 	}
 }
 
-func Comp(fs ...interface{}) func(...interface{}) interface{} {
-	return func(args ...interface{}) interface{} {
-		in := make([]reflect.Value, len(args))
-		for i, a := range args {
-			in[i] = reflect.ValueOf(a)
+func Comp(fs ...xfn) func(interface{}) reducingFn {
+	return func(arg interface{}) reducingFn {
+		rf := fs[0](arg)
+		for _, f := range fs[1:] {
+			rf = f(rf)
 		}
-		for i := len(fs) - 1; i >= 0; i-- {
-			f := fs[i]
-			fv := reflect.ValueOf(f)
-			in = fv.Call(in)
-		}
-		return in[0].Interface()
+		return rf
 	}
 }
 
-func Reduce(f, result, input interface{}) interface{} {
+func Reduce(f reducingFn, result, input interface{}) interface{} {
 	out := reflect.ValueOf(result)
 	iv := reflect.ValueOf(input)
-	fv := reflect.ValueOf(f)
 	for i := 0; i < iv.Len(); i++ {
-		out = fv.Call([]reflect.Value{out, iv.Index(i)})[0]
+		out = f(out, iv.Index(i))
 	}
 	return out.Interface()
 }
